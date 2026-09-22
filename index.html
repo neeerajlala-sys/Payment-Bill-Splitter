@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bill Split</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root{
+    --bg:#f6f5f2; --card:#ffffff; --ink:#1c1b19; --sub:#6b6862;
+    --accent:#b5482a; --accent-ink:#fff; --line:#e5e2dc; --paid:#3f7d4f;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#171614; --card:#221f1c; --ink:#f1efe9; --sub:#a8a49b;
+      --accent:#e07a52; --accent-ink:#1c1b19; --line:#39352f; --paid:#6fbf82;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#171614; --card:#221f1c; --ink:#f1efe9; --sub:#a8a49b;
+    --accent:#e07a52; --accent-ink:#1c1b19; --line:#39352f; --paid:#6fbf82;
+  }
+  html{scroll-padding-top:env(safe-area-inset-top,0px); height:100%;}
+  body{
+    height:100%; margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:520px;margin:0 auto;padding:20px 16px 40px;}
+  h1{font-size:1.25rem;margin:4px 0 2px;}
+  .muted{color:var(--sub);font-size:.85rem;margin:0 0 18px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px;}
+  label{display:block;font-size:.78rem;color:var(--sub);margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;}
+  input{
+    width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--line);
+    background:var(--bg);color:var(--ink);font-size:1rem;margin-bottom:12px;
+  }
+  .row{display:flex;gap:10px;}
+  .row > div{flex:1;}
+  .participant{
+    display:flex;align-items:center;gap:10px;border:1px solid var(--line);
+    border-radius:11px;padding:10px 12px;margin-bottom:8px;
+  }
+  .avatar{
+    width:34px;height:34px;border-radius:50%;background:var(--accent);color:var(--accent-ink);
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem;flex-shrink:0;
+  }
+  .name-input{margin:0;padding:6px 8px;font-size:.85rem;font-weight:600;}
+  .amt-input{width:88px;padding:6px 8px;margin:0;font-size:.9rem;}
+  .qr-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-top:6px;}
+  .qr-card{border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;}
+  .qr-card.paid{border-color:var(--paid);}
+  .qr-box{background:#fff;display:inline-block;padding:8px;border-radius:8px;margin:8px 0;}
+  .p-name{font-weight:600;font-size:.92rem;}
+  button{border:none;border-radius:10px;padding:8px 14px;font-size:.85rem;font-weight:600;cursor:pointer;}
+  .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--ink);}
+  .status-pill{
+    display:inline-block;font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:99px;
+    background:var(--line);color:var(--sub);
+  }
+  .status-pill.paid{background:var(--paid);color:#fff;}
+  .summary{display:flex;justify-content:space-between;font-size:.9rem;}
+  .total{font-weight:700;font-size:1.05rem;}
+  .hint{font-size:.78rem;color:var(--sub);margin-top:-6px;margin-bottom:10px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Bill Split</h1>
+  <p class="muted">Equal split across everyone — rows and QR codes update as you type.</p>
+
+  <div class="card">
+    <label>Your UPI ID (receiver — money comes to you)</label>
+    <input id="vpa" placeholder="yourname@upi">
+
+    <input id="note" type="hidden" value="BILL">
+
+    <div class="row">
+      <div>
+        <label>Total bill amount (₹)</label>
+        <input id="total" type="number" inputmode="decimal" placeholder="e.g. 3000">
+      </div>
+      <div>
+        <label>Number of people</label>
+        <input id="count" type="number" min="1" value="3">
+      </div>
+    </div>
+    <p class="hint" id="perHeadHint"></p>
+  </div>
+
+  <div class="card">
+    <div id="participantsList"></div>
+    <button class="btn-ghost" id="submitBtn" style="width:100%;margin-top:6px;">Generate All QR Codes</button>
+  </div>
+
+  <div class="card">
+    <div class="summary"><span>Total bill</span><span class="total" id="sumTotal">₹0</span></div>
+    <div class="summary"><span>Collected</span><span id="sumCollected">₹0</span></div>
+    <div class="summary"><span>Pending</span><span id="sumPending">₹0</span></div>
+  </div>
+
+  <div class="qr-grid" id="qrGrid"></div>
+</div>
+
+<script>
+let participants = [];
+
+function nameForIndex(i){
+  const letter = String.fromCharCode(65 + (i % 26));
+  const cycle = Math.floor(i / 26);
+  return cycle === 0 ? letter : letter + cycle;
+}
+
+function equalSplit(){
+  const total = parseFloat(document.getElementById('total').value) || 0;
+  const count = participants.length || 1;
+  const base = Math.floor((total / count) * 100) / 100;
+  let remaining = total;
+  participants.forEach((p, i) => {
+    if (i === participants.length - 1){
+      p.amount = Math.round(remaining * 100) / 100;
+    } else {
+      p.amount = base;
+      remaining -= base;
+    }
+  });
+  document.getElementById('perHeadHint').textContent =
+    total > 0 && count > 0 ? `≈ ₹${base.toFixed(2)} each (last person absorbs rounding)` : '';
+}
+
+function syncParticipantCount(){
+  const count = Math.max(1, parseInt(document.getElementById('count').value) || 1);
+  while (participants.length < count){
+    participants.push({ name: nameForIndex(participants.length), amount: 0, paid: false });
+  }
+  while (participants.length > count){
+    participants.pop();
+  }
+  equalSplit();
+  renderParticipants();
+  updateSummary();
+}
+
+function renderParticipants(){
+  const list = document.getElementById('participantsList');
+  list.innerHTML = '';
+  participants.forEach((p, idx) => {
+    const div = document.createElement('div');
+    div.className = 'participant';
+    div.innerHTML = `
+      <div class="avatar">${p.name.slice(0,2)}</div>
+      <input value="${p.name}" style="flex:1;" class="name-input" data-idx="${idx}">
+      <span style="color:var(--sub);font-size:.9rem;">₹${p.amount.toFixed(2)}</span>
+    `;
+    list.appendChild(div);
+  });
+  list.querySelectorAll('.name-input').forEach(inp=>{
+    inp.addEventListener('input', e=>{
+      const idx = +e.target.dataset.idx;
+      participants[idx].name = e.target.value || nameForIndex(idx);
+      renderQr();
+    });
+  });
+}
+
+function buildUpiUri(vpa, name, amount, note){
+  const params = new URLSearchParams({
+    pa: vpa, pn: name, am: amount.toFixed(2), cu: 'INR', tn: note || 'Bill split'
+  });
+  return 'upi://pay?' + params.toString();
+}
+
+function updateSummary(){
+  const total = participants.reduce((s,p)=>s+p.amount, 0);
+  const collected = participants.filter(p=>p.paid).reduce((s,p)=>s+p.amount, 0);
+  document.getElementById('sumTotal').textContent = '₹' + total.toFixed(2);
+  document.getElementById('sumCollected').textContent = '₹' + collected.toFixed(2);
+  document.getElementById('sumPending').textContent = '₹' + (total-collected).toFixed(2);
+}
+
+function renderQr(){
+  const grid = document.getElementById('qrGrid');
+  grid.innerHTML = '';
+  const vpa = document.getElementById('vpa').value.trim();
+  const note = document.getElementById('note').value.trim();
+  updateSummary();
+
+  if (!vpa){
+    grid.innerHTML = '<p class="hint">Enter your UPI ID above to generate QR codes.</p>';
+    return;
+  }
+
+  participants.forEach((p, idx) => {
+    if (p.amount <= 0) return;
+    const card = document.createElement('div');
+    card.className = 'qr-card' + (p.paid ? ' paid' : '');
+    card.innerHTML = `
+      <div class="p-name">${p.name} — ₹${p.amount.toFixed(2)}</div>
+      <div class="qr-box" id="qr-box-${idx}"></div>
+      <div><span class="status-pill ${p.paid ? 'paid' : ''}">${p.paid ? 'Paid' : 'Pending'}</span></div>
+      <div style="margin-top:8px;">
+        <button class="btn-ghost" data-idx="${idx}">${p.paid ? 'Undo' : 'Confirm'}</button>
+      </div>
+    `;
+    grid.appendChild(card);
+    try {
+      new QRCode(document.getElementById('qr-box-'+idx), {
+        text: buildUpiUri(vpa, p.name, p.amount, note),
+        width: 160, height: 160,
+        correctLevel: QRCode.CorrectLevel.L
+      });
+    } catch(err){
+      console.error('QR generation failed for', p.name, err);
+      document.getElementById('qr-box-'+idx).innerHTML =
+        '<span style="font-size:.7rem;color:var(--sub);">Could not generate QR — check UPI ID/name for unusual characters.</span>';
+    }
+  });
+
+  grid.querySelectorAll('button[data-idx]').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const idx = +e.target.dataset.idx;
+      participants[idx].paid = !participants[idx].paid;
+      renderQr();
+    });
+  });
+}
+
+document.getElementById('count').addEventListener('input', syncParticipantCount);
+document.getElementById('total').addEventListener('input', ()=>{ equalSplit(); renderParticipants(); updateSummary(); });
+document.getElementById('submitBtn').addEventListener('click', renderQr);
+
+syncParticipantCount();
+document.getElementById('qrGrid').innerHTML = '<p class="hint">Fill in your UPI ID and amounts, then tap "Generate All QR Codes".</p>';
+</script>
+</body>
+</html>
